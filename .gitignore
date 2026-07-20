@@ -2,6 +2,17 @@
 .envrc
 .direnv/
 
+# OS
+.DS_Store
+Thumbs.db
+
 # Test artifacts
 tests/*.log
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
 
