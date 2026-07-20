@@ -1,0 +1,9 @@
+# Agent detection override for Command Code (cmd).
+# Seeded into herdr's agent-detection config dir by scripts/common.sh.
+# Field names follow herdr's agent detection manifest schema; verify with:
+#   herdr api schema --json
+
+[[agent]]
+name = "cmd"
+match_cmdline = ["cmd"]
+alt_cmdline = ["command-code"]

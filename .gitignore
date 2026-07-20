@@ -1,0 +1,7 @@
+# Direnv
+.envrc
+.direnv/
+
+# Test artifacts
+tests/*.log
+

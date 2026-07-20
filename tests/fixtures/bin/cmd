@@ -1,0 +1,4 @@
+#!/bin/sh
+# stub cmd: record argv
+OUT="${HERDR_CAPTURE:-/tmp/herdr-capture.jsonl}"
+printf '%s\n' "$(printf '%s\0' "$@" | sed 's/"/\\"/g; s/\x00/","/g; s/^/["/; s/$/"]/')" >> "$OUT"

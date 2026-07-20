@@ -1,0 +1,45 @@
+id = "commandcode.integration"
+name = "Command Code"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Launch and manage Command Code (cmd) agents inside Herdr, with session restore and lifecycle state."
+platforms = ["linux", "macos", "windows"]
+
+# Interactive Command Code sessions run as plugin PANE entrypoints. Herdr opens a
+# real terminal PTY for each, so the cmd TUI gets a TTY (actions/CLI have none and
+# cannot launch interactive agents). Bind these in your herdr config, e.g.:
+#   [[keys.command]]
+#   key = "prefix+c"
+#   type = "plugin_pane"
+#   command = "commandcode.integration.task"
+#   description = "Command Code: new task"
+
+[[panes]]
+id = "task"
+title = "Command Code"
+placement = "split"
+command = ["sh", "scripts/launch.sh", "task"]
+
+[[panes]]
+id = "resume-last"
+title = "Command Code (last session)"
+placement = "split"
+command = ["sh", "scripts/launch.sh", "resume-last"]
+
+[[panes]]
+id = "resume-named"
+title = "Command Code (named session)"
+placement = "split"
+command = ["sh", "scripts/launch.sh", "resume-named"]
+
+[[actions]]
+id = "setup"
+title = "Command Code: install herdr integration"
+contexts = ["workspace"]
+command = ["sh", "scripts/setup.sh"]
+
+[[actions]]
+id = "notify"
+title = "Command Code: send notification"
+contexts = ["workspace", "pane"]
+command = ["sh", "scripts/notify.sh"]
