@@ -5,3 +5,4 @@
 - Herdr agent state definitions: `blocked` = needs input/approval/decision, `working` = actively running, `done` = finished but unseen by user, `idle` = finished/waiting and seen, `unknown` = cannot classify. Confidence: 0.75
 - Permission prompts (e.g., "Do you want to make this edit?") should also trigger `blocked` state in herdr, not just AskUserQuestion/Question tools. The `is_blocking_tool` check needs to cover all user-confirmation dialogs including `edit_file` and `write_file`. Confidence: 0.75
 - Match OpenCode's plugin lifecycle: SessionStart should report `idle` (not `working`). OpenCode shows a green checkmark on start because it starts idle and only transitions to working when actually processing. Confidence: 0.70
+- Use HTTPS (not SSH) for git remote URLs when interacting with GitHub. Standard HTTP authentication is preferred over SSH key-based auth. Confidence: 0.65

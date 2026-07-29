@@ -9,6 +9,9 @@ HERDR_CAPTURE="${HERDR_CAPTURE:-/tmp/herdr-capture.jsonl}"
 export HERDR_CAPTURE
 export HERDR_BIN_PATH="$STUB"
 export HERDR_PANE_ID="pane-123"
+# SessionStart starts a watcher in production. Keep test watchers single-scan
+# so they cannot outlive this test process.
+export HERDR_PERMISSION_MAX_SCANS=1
 
 # Run the hook with a payload; HERDR_ENV must be set by caller.
 run_hook() { echo "$1" | sh "$HOOK"; }
@@ -22,13 +25,13 @@ unset HERDR_ENV
 run_hook '{"hook_event_name":"SessionStart","session_id":"s1"}'
 t_assert_eq "0" "$(capture_count)" "should not call herdr"
 
-# 2. SessionStart -> working + label + session with --session-start-source
+# 2. SessionStart -> idle + label + session with --session-start-source
 clear_capture
-t_title "SessionStart reports working + label + session"
+t_title "SessionStart reports idle + label + session"
 export HERDR_ENV=1
 run_hook '{"hook_event_name":"SessionStart","session_id":"sess-abc"}'
 t_assert_eq "3" "$(capture_count)" "expected 3 calls (report-agent + report-metadata + report-agent-session)"
-t_assert_eq "working" "$(capture_flag 1 --state)" "SessionStart state is working"
+t_assert_eq "idle" "$(capture_flag 1 --state)" "SessionStart state is idle"
 t_assert_eq "cmd" "$(capture_flag 2 --display-agent)" "display-agent label set"
 t_assert_eq "sess-abc" "$(capture_flag 3 --agent-session-id)" "session id reported"
 t_assert_eq "new" "$(capture_flag 3 --session-start-source)" "session-start-source is new"
@@ -70,7 +73,51 @@ t_title "comma inside session_id value"
 run_hook '{"hook_event_name":"SessionStart","session_id":"a,b,c"}'
 t_assert_eq "a,b,c" "$(capture_flag 3 --agent-session-id)" "comma preserved"
 
-# 9. --seq is present and monotonically increasing per pane (authority counter)
+# 9. Exact visible shell-command permission prompt -> blocked
+clear_capture
+t_title "exact shell permission prompt reports blocked"
+export HERDR_PANE_CONTENT='Execute Shell Command
+Command Code needs to execute cd /workspace && flutter analyze'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "1" "$(capture_count)" "one blocked report"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "exact prompt is blocked"
+t_assert_eq "commandcode" "$(capture_flag 1 --source)" "uses Command Code authority"
+t_assert_eq "cmd" "$(capture_flag 1 --agent)" "uses cmd agent label"
+permission_seq=$(capture_flag 1 --seq)
+t_assert_eq "yes" "$([ -n "$permission_seq" ] && [ "$permission_seq" -eq "$permission_seq" ] 2>/dev/null && echo yes || echo no)" "blocked report has numeric seq"
+
+# 10. Near miss must not match only one prompt line.
+clear_capture
+t_title "near-miss shell permission prompt is ignored"
+export HERDR_PANE_CONTENT='Execute Shell Command
+Command Code will execute'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "0" "$(capture_count)" "near miss does not report blocked"
+
+# 11. A matching screen reports once until the prompt clears, then can report again.
+clear_capture
+t_title "shell permission watcher debounces and resets"
+PERMISSION_TMP=$(mktemp -d)
+export HERDR_PANE_CONTENT_SEQUENCE_FILE="$PERMISSION_TMP/screens"
+export HERDR_PANE_READ_COUNT_FILE="$PERMISSION_TMP/read-count"
+unset HERDR_PANE_CONTENT
+printf '%s\n---HERDR-PANE-READ---\n%s\n---HERDR-PANE-READ---\n\n---HERDR-PANE-READ---\n%s' \
+  'Execute Shell Command
+Command Code needs to execute' \
+  'Execute Shell Command
+Command Code needs to execute' \
+  'Execute Shell Command
+Command Code needs to execute' > "$HERDR_PANE_CONTENT_SEQUENCE_FILE"
+export HERDR_PERMISSION_MAX_SCANS=4
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "2" "$(capture_count)" "one report before and after the prompt clears"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "first matching screen is blocked"
+t_assert_eq "blocked" "$(capture_flag 2 --state)" "matching screen after clear is blocked"
+rm -rf "$PERMISSION_TMP"
+unset HERDR_PANE_CONTENT_SEQUENCE_FILE HERDR_PANE_READ_COUNT_FILE
+export HERDR_PERMISSION_MAX_SCANS=1
+
+# 12. --seq is present and monotonically increasing per pane (authority counter)
 TMP_SEQ="$(mktemp -d)"
 export TMPDIR="$TMP_SEQ"
 export HERDR_PANE_ID="seq-pane-test"

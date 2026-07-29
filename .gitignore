@@ -9,10 +9,14 @@ Thumbs.db
 # Test artifacts
 tests/*.log
 
+# Agent handoff documents
+PLAN_*.md
+DEBUG_*.md
+FEATURE_*.md
+
 # Editor
 *.swp
 *.swo
 *~
 .vscode/
 .idea/
-

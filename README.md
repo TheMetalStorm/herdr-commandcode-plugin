@@ -4,9 +4,9 @@ Makes [Command Code](https://commandcode.ai) (`cmd`) a first-class agent inside
 [Herdr](https://herdr.dev), the terminal multiplexer for coding agents.
 
 - **Lifecycle state** — `idle` on start (green checkmark), `working` during
-  processing, `blocked` when asking for input or confirming edits, `idle` when
-  finished. Status is reported from inside the live `cmd` process — `cmd` does
-  **not** need to exit for the state to update.
+  processing, `blocked` when asking for input, confirming edits, or approving
+  a shell command, `idle` when finished. Status is reported from inside the
+  live `cmd` process — `cmd` does **not** need to exit for the state to update.
 - **Session restore** — reports the Command Code session id so Herdr can resume
   the agent after a server restart.
 - **Sidebar detection** — seeds an agent-detection override so Herdr recognizes
@@ -95,8 +95,21 @@ This plugin mirrors Herdr's OpenCode integration: status is reported from
 | `SessionStart` | `idle` | Agent launches (green checkmark) |
 | `PreToolUse` | `blocked` | `AskUserQuestion`, `Question`, `edit_file`, `write_file` |
 | `PreToolUse` | `working` | Any other tool |
+| Visible pane prompt | `blocked` | Exact shell-command permission signal (below) |
 | `PostToolUse` | `working` | After any tool completes |
 | `Stop` | `idle` | Turn finished |
+
+For a shell command permission request, the hook watches the current visible
+pane (not terminal history) for this exact two-line signal:
+
+```text
+Execute Shell Command
+Command Code needs to execute
+```
+
+It reports `blocked` once while that signal is visible. After the user approves
+or rejects the request, normal `PostToolUse` or `Stop` lifecycle events report
+the next `working` or `idle` state.
 
 Command Code has no `Exit` hook event. On force-quit, the persistent agent
 claim + Herdr's process detection handle the transition.
