@@ -65,36 +65,90 @@ label() {
     --source commandcode --agent cmd --display-agent cmd >/dev/null 2>&1
 }
 
-# Command Code renders this prompt after a shell command requests approval.
-# It is read from the live screen, rather than history, so a resolved prompt
-# cannot keep the pane blocked on a later turn.
-SHELL_PERMISSION_SIGNAL='Execute Shell Command
+# Command Code renders blocking prompts on the visible pane when waiting for
+# user input/decision. These are read from the live screen, rather than history,
+# so a resolved prompt cannot keep the pane blocked on a later turn.
+#
+# Shell command permission:
+#   Execute Shell Command
+#   Command Code needs to execute
+#
+# Plan / Act mode prompts:
+#   Enter plan mode for read-only exploration and planning?
+#   Enter act mode for implementation?
+#
+# Review / approve prompt (plan review):
+#   REVIEW
+#   Approve ctrl+a   executes the plan
+#   Cancel esc
+BLOCKING_SIGNAL_SHELL_PERMISSION='Execute Shell Command
 Command Code needs to execute'
+BLOCKING_SIGNAL_PLAN_MODE='Enter plan mode for read-only exploration and planning?'
+BLOCKING_SIGNAL_ACT_MODE='Enter act mode for'
+# Require the review heading and approval control in the same live snapshot.
+# A lone "Approve ctrl+a" can otherwise be stale output or unrelated text.
+BLOCKING_SIGNAL_REVIEW_HEADING='REVIEW'
+BLOCKING_SIGNAL_REVIEW_APPROVAL='Approve ctrl+a'
 
-has_shell_permission_prompt() {
+# The visible pane is authoritative for all normal prompts. It also catches the
+# full plan review card when it is onscreen.
+has_visible_blocking_prompt() {
   pane_content=$("$HERDR" pane read "$PANE_ID" --source visible 2>/dev/null) || return 2
-  case "$pane_content" in
-    *"$SHELL_PERMISSION_SIGNAL"*) return 0 ;;
+  for signal in "$BLOCKING_SIGNAL_SHELL_PERMISSION" "$BLOCKING_SIGNAL_PLAN_MODE" "$BLOCKING_SIGNAL_ACT_MODE"; do
+    case "$pane_content" in
+      *"$signal"*) return 0 ;;
+    esac
+  done
+  has_review_card "$pane_content"
+}
+
+# Both parts must be ordered as Command Code renders them in one pane sample.
+has_review_card() {
+  case "$1" in
+    *"$BLOCKING_SIGNAL_REVIEW_HEADING"*"$BLOCKING_SIGNAL_REVIEW_APPROVAL"*) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-watch_shell_permission() {
+# The detection snapshot is another live, plain-text rendering. It is only a
+# fallback for a review card, which can sit outside the visible viewport.
+# Do not read recent/recent-unwrapped here: they retain resolved cards in
+# scrollback and would leave the agent incorrectly blocked.
+has_detection_review_card() {
+  pane_content=$("$HERDR" pane read "$PANE_ID" --source detection 2>/dev/null)
+  [ $? -eq 0 ] || return 2
+  has_review_card "$pane_content"
+}
+
+watch_blocking_prompt() {
   seen=0
   read_failures=0
   scans=0
   max_scans="${HERDR_PERMISSION_MAX_SCANS:-}"
 
   while :; do
-    if has_shell_permission_prompt; then
+    visible_result=0
+    detection_result=1
+    has_visible_blocking_prompt; visible_result=$?
+    if [ "$visible_result" -eq 0 ]; then
+      prompt_result=0
+    else
+      has_detection_review_card; detection_result=$?
+      if [ "$detection_result" -eq 0 ]; then
+        prompt_result=0
+      else
+        prompt_result=1
+      fi
+    fi
+
+    if [ "$prompt_result" -eq 0 ]; then
       read_failures=0
       if [ "$seen" -eq 0 ]; then
         report blocked
         seen=1
       fi
     else
-      read_result=$?
-      if [ "$read_result" -eq 2 ]; then
+      if [ "$visible_result" -eq 2 ] && [ "$detection_result" -eq 2 ]; then
         read_failures=$((read_failures + 1))
         [ "$read_failures" -lt "${HERDR_PERMISSION_MAX_READ_FAILURES:-5}" ] || break
       else
@@ -109,19 +163,19 @@ watch_shell_permission() {
   done
 }
 
-start_shell_permission_watcher() {
-  watcher_dir="${TMPDIR:-/tmp}/herdr-cmd-shell-permission-watcher-${PANE_ID}"
+start_blocking_prompt_watcher() {
+  watcher_dir="${TMPDIR:-/tmp}/herdr-cmd-blocking-prompt-watcher-${PANE_ID}"
   mkdir "$watcher_dir" 2>/dev/null || return 0
   (
     trap 'rmdir "$watcher_dir" 2>/dev/null' 0 HUP INT TERM
-    watch_shell_permission
+    watch_blocking_prompt
   ) &
 }
 
 # Internal test/worker modes must not consume a Command Code JSON payload.
 case "${1:-}" in
   --watch-shell-permission)
-    watch_shell_permission
+    watch_blocking_prompt
     exit 0
     ;;
 esac
@@ -155,7 +209,7 @@ case "$EVENT" in
         --session-start-source new \
         --seq "$(next_seq)" >/dev/null 2>&1
     fi
-    start_shell_permission_watcher
+    start_blocking_prompt_watcher
     ;;
   PreToolUse)
     if is_blocking_tool; then

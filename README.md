@@ -95,21 +95,37 @@ This plugin mirrors Herdr's OpenCode integration: status is reported from
 | `SessionStart` | `idle` | Agent launches (green checkmark) |
 | `PreToolUse` | `blocked` | `AskUserQuestion`, `Question`, `edit_file`, `write_file` |
 | `PreToolUse` | `working` | Any other tool |
-| Visible pane prompt | `blocked` | Exact shell-command permission signal (below) |
+| Visible pane prompt | `blocked` | Shell-command permission, plan mode, act mode, review prompts (below) |
 | `PostToolUse` | `working` | After any tool completes |
 | `Stop` | `idle` | Turn finished |
 
-For a shell command permission request, the hook watches the current visible
-pane (not terminal history) for this exact two-line signal:
+The hook watches the current visible pane (not terminal history) for these
+blocking signals:
 
 ```text
 Execute Shell Command
 Command Code needs to execute
+
+Enter plan mode for read-only exploration and planning?
+
+Enter act mode for
+
+REVIEW
+Approve ctrl+a
 ```
 
-It reports `blocked` once while that signal is visible. After the user approves
-or rejects the request, normal `PostToolUse` or `Stop` lifecycle events report
-the next `working` or `idle` state.
+The first is a two-line shell-command permission request. The second is the
+plan-mode entry prompt. The third is the act-mode entry prompt (prefix match —
+any wording starting with "Enter act mode for" is recognized). The fourth is the
+plan review / approval card: it requires both `REVIEW` and `Approve ctrl+a` in
+one live pane snapshot. The hook checks the visible pane first, then Herdr's
+live plain-text detection snapshot if the card sits outside the viewport. It
+never uses scrollback for this state, so an approved review cannot leave the
+pane incorrectly blocked.
+
+It reports `blocked` once while any of these signals is visible. After the user
+approves/rejects the request or answers the question, normal `PostToolUse` or
+`Stop` lifecycle events report the next `working` or `idle` state.
 
 Command Code has no `Exit` hook event. On force-quit, the persistent agent
 claim + Herdr's process detection handle the transition.

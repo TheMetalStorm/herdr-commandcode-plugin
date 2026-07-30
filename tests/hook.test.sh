@@ -98,8 +98,9 @@ t_assert_eq "0" "$(capture_count)" "near miss does not report blocked"
 clear_capture
 t_title "shell permission watcher debounces and resets"
 PERMISSION_TMP=$(mktemp -d)
-export HERDR_PANE_CONTENT_SEQUENCE_FILE="$PERMISSION_TMP/screens"
-export HERDR_PANE_READ_COUNT_FILE="$PERMISSION_TMP/read-count"
+export HERDR_PANE_CONTENT_VISIBLE_SEQUENCE_FILE="$PERMISSION_TMP/screens"
+export HERDR_PANE_READ_COUNT_VISIBLE_FILE="$PERMISSION_TMP/read-count"
+export HERDR_PANE_CONTENT_DETECTION=''
 unset HERDR_PANE_CONTENT
 printf '%s\n---HERDR-PANE-READ---\n%s\n---HERDR-PANE-READ---\n\n---HERDR-PANE-READ---\n%s' \
   'Execute Shell Command
@@ -107,17 +108,23 @@ Command Code needs to execute' \
   'Execute Shell Command
 Command Code needs to execute' \
   'Execute Shell Command
-Command Code needs to execute' > "$HERDR_PANE_CONTENT_SEQUENCE_FILE"
+Command Code needs to execute' > "$HERDR_PANE_CONTENT_VISIBLE_SEQUENCE_FILE"
 export HERDR_PERMISSION_MAX_SCANS=4
 sh "$HOOK" --watch-shell-permission
 t_assert_eq "2" "$(capture_count)" "one report before and after the prompt clears"
 t_assert_eq "blocked" "$(capture_flag 1 --state)" "first matching screen is blocked"
 t_assert_eq "blocked" "$(capture_flag 2 --state)" "matching screen after clear is blocked"
 rm -rf "$PERMISSION_TMP"
-unset HERDR_PANE_CONTENT_SEQUENCE_FILE HERDR_PANE_READ_COUNT_FILE
+unset HERDR_PANE_CONTENT_VISIBLE_SEQUENCE_FILE HERDR_PANE_READ_COUNT_VISIBLE_FILE HERDR_PANE_CONTENT_DETECTION
 export HERDR_PERMISSION_MAX_SCANS=1
 
 # 12. --seq is present and monotonically increasing per pane (authority counter)
+if [ "${TMPDIR+x}" = "x" ]; then
+  ORIGINAL_TMPDIR=$TMPDIR
+  TMPDIR_WAS_SET=1
+else
+  TMPDIR_WAS_SET=0
+fi
 TMP_SEQ="$(mktemp -d)"
 export TMPDIR="$TMP_SEQ"
 export HERDR_PANE_ID="seq-pane-test"
@@ -130,5 +137,104 @@ s2=$(capture_flag 2 --seq)
 t_assert_eq "yes" "$([ -n "$s1" ] && [ "$s1" -eq "$s1" ] 2>/dev/null && echo yes || echo no)" "seq is numeric"
 t_assert_eq "yes" "$([ "$s2" -gt "$s1" ] 2>/dev/null && echo yes || echo no)" "seq increases across calls"
 rm -rf "$TMP_SEQ"
+if [ "$TMPDIR_WAS_SET" -eq 1 ]; then
+  export TMPDIR="$ORIGINAL_TMPDIR"
+else
+  unset TMPDIR
+fi
+
+# 13. Plan mode prompt in visible pane -> blocked
+clear_capture
+t_title "plan mode prompt reports blocked"
+unset HERDR_PANE_CONTENT_VISIBLE HERDR_PANE_CONTENT_DETECTION HERDR_PANE_CONTENT_RECENT_UNWRAPPED
+export HERDR_PANE_CONTENT='Enter plan mode for read-only exploration and planning?'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "1" "$(capture_count)" "one blocked report"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "plan mode prompt is blocked"
+
+# 14. Act mode prompt in visible pane -> blocked
+clear_capture
+t_title "act mode prompt reports blocked"
+export HERDR_PANE_CONTENT='Enter act mode for implementation?'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "1" "$(capture_count)" "one blocked report"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "act mode prompt is blocked"
+
+# 15. Near-miss plan mode prompt is ignored
+clear_capture
+t_title "near-miss plan mode prompt is ignored"
+export HERDR_PANE_CONTENT='Enter plan mode for'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "0" "$(capture_count)" "partial match does not report blocked"
+
+# 16. Full review card in the visible pane -> blocked
+clear_capture
+t_title "visible review card reports blocked"
+export HERDR_PANE_CONTENT='REVIEW
+Approve ctrl+a   executes the plan
+Cancel esc'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "1" "$(capture_count)" "one blocked report"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "review prompt is blocked"
+
+# 17. A review heading alone is not enough to mark the pane blocked.
+clear_capture
+t_title "near-miss review prompt is ignored"
+export HERDR_PANE_CONTENT='REVIEW'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "0" "$(capture_count)" "REVIEW alone does not report blocked"
+
+# 18. Approval text alone is not enough to mark the pane blocked.
+clear_capture
+t_title "approval text without review card is ignored"
+export HERDR_PANE_CONTENT='Approve ctrl+a   executes the plan'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "0" "$(capture_count)" "approval text alone does not report blocked"
+
+# 19. Detection is a live fallback when the review card is outside the viewport.
+clear_capture
+t_title "detection review card reports blocked"
+export HERDR_PANE_CONTENT_VISIBLE='working on implementation'
+export HERDR_PANE_CONTENT_DETECTION='REVIEW
+Approve ctrl+a   executes the plan'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "1" "$(capture_count)" "one blocked report from detection"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "detection review card is blocked"
+unset HERDR_PANE_CONTENT_VISIBLE HERDR_PANE_CONTENT_DETECTION
+
+# 20. Stale scrollback must not keep the pane blocked after approval.
+clear_capture
+t_title "stale unwrapped review card is ignored"
+export HERDR_PANE_CONTENT_VISIBLE='implementation is running'
+export HERDR_PANE_CONTENT_DETECTION='implementation is running'
+export HERDR_PANE_CONTENT_RECENT_UNWRAPPED='REVIEW
+Approve ctrl+a   executes the plan'
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "0" "$(capture_count)" "scrollback-only review card is ignored"
+unset HERDR_PANE_CONTENT_VISIBLE HERDR_PANE_CONTENT_DETECTION HERDR_PANE_CONTENT_RECENT_UNWRAPPED
+
+# 21. A resolved review card resets the watcher so a later review reports blocked.
+clear_capture
+t_title "review watcher resets after approval"
+REVIEW_TMP=$(mktemp -d)
+export HERDR_PANE_CONTENT_VISIBLE_SEQUENCE_FILE="$REVIEW_TMP/screens"
+export HERDR_PANE_READ_COUNT_VISIBLE_FILE="$REVIEW_TMP/read-count"
+export HERDR_PANE_CONTENT_DETECTION=''
+unset HERDR_PANE_CONTENT
+printf '%s\n---HERDR-PANE-READ---\n%s\n---HERDR-PANE-READ---\n\n---HERDR-PANE-READ---\n%s' \
+  'REVIEW
+Approve ctrl+a   executes the plan' \
+  'REVIEW
+Approve ctrl+a   executes the plan' \
+  'REVIEW
+Approve ctrl+a   executes the plan' > "$HERDR_PANE_CONTENT_VISIBLE_SEQUENCE_FILE"
+export HERDR_PERMISSION_MAX_SCANS=4
+sh "$HOOK" --watch-shell-permission
+t_assert_eq "2" "$(capture_count)" "review reports before and after a resolved card"
+t_assert_eq "blocked" "$(capture_flag 1 --state)" "first review card is blocked"
+t_assert_eq "blocked" "$(capture_flag 2 --state)" "later review card is blocked"
+rm -rf "$REVIEW_TMP"
+unset HERDR_PANE_CONTENT_VISIBLE_SEQUENCE_FILE HERDR_PANE_READ_COUNT_VISIBLE_FILE HERDR_PANE_CONTENT_DETECTION
+export HERDR_PERMISSION_MAX_SCANS=1
 
 summary
